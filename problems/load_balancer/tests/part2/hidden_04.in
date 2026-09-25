@@ -1,0 +1,8 @@
+3
+999 999 999
+5
+CONNECT reuse o1
+DISCONNECT reuse
+CONNECT reuse o2
+DISCONNECT reuse
+CONNECT reuse o3

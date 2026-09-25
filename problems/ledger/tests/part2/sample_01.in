@@ -1,0 +1,5 @@
+4
+t1 DEPOSIT alice 1000
+t2 TRANSFER alice bob 400
+t3 TRANSFER carol alice 50
+t4 TRANSFER bob bob 400

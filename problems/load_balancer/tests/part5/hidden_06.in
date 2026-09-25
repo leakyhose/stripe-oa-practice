@@ -1,0 +1,8 @@
+4
+999 999 999 999
+5
+CONNECT c1 same
+CONNECT c2 same
+CONNECT c3 same
+SHUTDOWN 0
+CONNECT c4 same

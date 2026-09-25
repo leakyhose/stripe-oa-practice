@@ -1,0 +1,7 @@
+2
+999 999
+4
+CONNECT a shared
+CONNECT b shared
+CONNECT c shared
+CONNECT d other

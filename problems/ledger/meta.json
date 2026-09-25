@@ -1,0 +1,5 @@
+{
+  "minutes": 25,
+  "blurb": "transaction ledger: balances, transfers, reversals",
+  "parts": ["balances", "transfers", "reversals"]
+}

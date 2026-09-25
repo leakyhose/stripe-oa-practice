@@ -1,0 +1,5 @@
+{
+  "minutes": 60,
+  "blurb": "sticky connection load balancer: route/disconnect/stickiness/capacity/shutdown",
+  "parts": ["routing", "disconnect", "stickiness", "capacity", "shutdown"]
+}

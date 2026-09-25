@@ -1,0 +1,4 @@
+3
+h1 DEPOSIT src 10
+h2 TRANSFER src fresh 0
+h3 TRANSFER src other 10

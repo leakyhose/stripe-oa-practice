@@ -1,0 +1,342 @@
+#!/usr/bin/env python3
+"""oa - a Stripe-style OA practice harness.
+
+Usage:
+  ./oa list                 show problems
+  ./oa start <problem>      start the clock, create your workspace file, print Part 1
+  ./oa spec <problem> [N]   re-print spec for an unlocked part (default: all unlocked)
+  ./oa test <problem>       run every unlocked part (regression included)
+  ./oa time <problem>       time remaining
+  ./oa submit <problem>     stop the clock, print final score
+  ./oa reveal <problem>     post-mortem: hidden cases + reference solution (after submit)
+  ./oa status               all problems at a glance
+  ./oa reset <problem>      wipe progress for a fresh attempt (archives your solution)
+"""
+import json, os, subprocess, sys, time, shutil, datetime
+
+ROOT = os.path.dirname(os.path.abspath(__file__))
+PROBLEMS = os.path.join(ROOT, "problems")
+WORK = os.path.join(ROOT, "workspace")
+REF = os.path.join(ROOT, "_reference")
+STATE_PATH = os.path.join(ROOT, ".state.json")
+TIMEOUT = 10
+
+
+def load_state():
+    if os.path.exists(STATE_PATH):
+        with open(STATE_PATH) as f:
+            return json.load(f)
+    return {}
+
+
+def save_state(s):
+    with open(STATE_PATH, "w") as f:
+        json.dump(s, f, indent=2)
+
+
+def meta(problem):
+    p = os.path.join(PROBLEMS, problem, "meta.json")
+    if not os.path.exists(p):
+        die("no such problem: %s  (try ./oa list)" % problem)
+    with open(p) as f:
+        return json.load(f)
+
+
+def die(msg):
+    print("error: " + msg)
+    sys.exit(1)
+
+
+def sol_path(problem):
+    return os.path.join(WORK, problem, "solution.py")
+
+
+def fmt_mmss(sec):
+    sec = int(sec)
+    sign = "-" if sec < 0 else ""
+    sec = abs(sec)
+    return "%s%d:%02d" % (sign, sec // 60, sec % 60)
+
+
+def remaining(st):
+    return st["minutes"] * 60 - (time.time() - st["started_at"])
+
+
+def banner(text):
+    print("\n" + "=" * 68)
+    print(text)
+    print("=" * 68)
+
+
+# ---------------------------------------------------------------- commands
+
+def cmd_list(args):
+    for name in sorted(os.listdir(PROBLEMS)):
+        if not os.path.isdir(os.path.join(PROBLEMS, name)):
+            continue
+        m = meta(name)
+        print("  %-20s %2d min  %d parts   %s" % (name, m["minutes"], len(m["parts"]), m["blurb"]))
+
+
+def cmd_start(args):
+    problem = args[0]
+    m = meta(problem)
+    state = load_state()
+    if problem in state and not state[problem].get("submitted"):
+        die("%s is already in progress (%s left). ./oa reset %s to start over."
+            % (problem, fmt_mmss(remaining(state[problem])), problem))
+    os.makedirs(os.path.join(WORK, problem), exist_ok=True)
+    if not os.path.exists(sol_path(problem)):
+        shutil.copy(os.path.join(PROBLEMS, problem, "stub.py"), sol_path(problem))
+    state[problem] = {"started_at": time.time(), "minutes": m["minutes"],
+                      "unlocked": 1, "submitted": False, "part_times": {}}
+    save_state(state)
+    banner("%s - %d minutes - clock started" % (problem.upper(), m["minutes"]))
+    print("Write your solution in: %s" % os.path.relpath(sol_path(problem), os.getcwd()))
+    print("Run tests with:         ./oa test %s" % problem)
+    print("Parts unlock as you pass them. Later parts reuse the same file.\n")
+    print_spec(problem, 1)
+
+
+def print_spec(problem, part):
+    p = os.path.join(PROBLEMS, problem, "spec", "part%d.md" % part)
+    with open(p) as f:
+        print(f.read())
+
+
+def cmd_spec(args):
+    problem = args[0]
+    state = load_state().get(problem) or die("not started: %s" % problem)
+    if len(args) > 1:
+        n = int(args[1])
+        if n > state["unlocked"]:
+            die("part %d is not unlocked yet" % n)
+        print_spec(problem, n)
+    else:
+        for n in range(1, state["unlocked"] + 1):
+            print_spec(problem, n)
+
+
+def collect_cases(problem, part):
+    d = os.path.join(PROBLEMS, problem, "tests", "part%d" % part)
+    cases = []
+    for fn in sorted(os.listdir(d)):
+        if not fn.endswith(".in"):
+            continue
+        name = fn[:-3]
+        with open(os.path.join(d, fn)) as f:
+            inp = f.read()
+        with open(os.path.join(d, name + ".out")) as f:
+            exp = f.read()
+        cases.append((name, inp, exp))
+    return cases
+
+
+def normalize(s):
+    lines = [ln.rstrip() for ln in s.replace("\r\n", "\n").split("\n")]
+    while lines and lines[-1] == "":
+        lines.pop()
+    return lines
+
+
+def run_case(problem, inp):
+    try:
+        r = subprocess.run([sys.executable, sol_path(problem)], input=inp,
+                           capture_output=True, text=True, timeout=TIMEOUT)
+    except subprocess.TimeoutExpired:
+        return None, "TIMEOUT after %ds" % TIMEOUT
+    if r.returncode != 0:
+        tail = r.stderr.strip().split("\n")[-3:]
+        return None, "CRASH: " + " | ".join(tail)
+    return r.stdout, None
+
+
+def show_diff(exp, got):
+    e, g = normalize(exp), normalize(got)
+    print("      expected                        | got")
+    print("      " + "-" * 31 + "+" + "-" * 31)
+    for i in range(max(len(e), len(g))):
+        a = e[i] if i < len(e) else "<missing>"
+        b = g[i] if i < len(g) else "<missing>"
+        mark = " " if a == b else ">"
+        print("    %s %-31s | %s" % (mark, a[:31], b[:31]))
+
+
+def cmd_test(args):
+    problem = args[0]
+    state = load_state()
+    st = state.get(problem) or die("not started: %s  (./oa start %s)" % (problem, problem))
+    if not os.path.exists(sol_path(problem)):
+        die("no solution file at %s" % sol_path(problem))
+    m = meta(problem)
+    left = remaining(st)
+    over = left < 0
+    banner("TEST %s   %s %s" % (problem, fmt_mmss(abs(left)), "OVER TIME" if over else "left"))
+
+    # snapshot the solution on every run, so the post-mortem can see how the
+    # code actually evolved instead of guessing from the final file
+    snapdir = os.path.join(WORK, problem, ".snapshots")
+    os.makedirs(snapdir, exist_ok=True)
+    elapsed = int(st["minutes"] * 60 - left)
+    shutil.copy(sol_path(problem),
+                os.path.join(snapdir, "p%d-%04d.py" % (st["unlocked"], max(elapsed, 0))))
+
+    all_pass = True
+    for part in range(1, st["unlocked"] + 1):
+        cases = collect_cases(problem, part)
+        passed = failed = 0
+        fails = []
+        for name, inp, exp in cases:
+            got, err = run_case(problem, inp)
+            ok = (err is None and normalize(got) == normalize(exp))
+            if ok:
+                passed += 1
+            else:
+                failed += 1
+                all_pass = False
+                fails.append((name, inp, exp, got, err))
+        tag = "PASS" if failed == 0 else "FAIL"
+        print("\nPart %d: %s  %d/%d" % (part, tag, passed, len(cases)))
+        for name, inp, exp, got, err in fails:
+            if name.startswith("sample"):
+                print("  x %s" % name)
+                if err:
+                    print("      %s" % err)
+                else:
+                    show_diff(exp, got)
+            else:
+                print("  x %s   (hidden - no details until submit)%s"
+                      % (name, "  [" + err.split(":")[0] + "]" if err else ""))
+
+    if all_pass and st["unlocked"] < len(m["parts"]):
+        st["part_times"][str(st["unlocked"])] = round(st["minutes"] * 60 - left)
+        st["unlocked"] += 1
+        save_state(state)
+        banner("PART %d UNLOCKED" % st["unlocked"])
+        print_spec(problem, st["unlocked"])
+    elif all_pass:
+        st["part_times"][str(st["unlocked"])] = round(st["minutes"] * 60 - left)
+        save_state(state)
+        print("\nAll parts passing. ./oa submit %s when you're done." % problem)
+
+
+def cmd_time(args):
+    problem = args[0]
+    st = load_state().get(problem) or die("not started")
+    print("%s remaining" % fmt_mmss(remaining(st)))
+
+
+def cmd_submit(args):
+    problem = args[0]
+    state = load_state()
+    st = state.get(problem) or die("not started")
+    m = meta(problem)
+    elapsed = st["minutes"] * 60 - remaining(st)
+    total_p = total_c = 0
+    lines = []
+    for part in range(1, len(m["parts"]) + 1):
+        cases = collect_cases(problem, part)
+        if part > st["unlocked"]:
+            lines.append("  Part %d: not reached           0/%d" % (part, len(cases)))
+            total_c += len(cases)
+            continue
+        p = sum(1 for n, i, e in cases
+                if (lambda g, err: err is None and normalize(g) == normalize(e))(*run_case(problem, i)))
+        lines.append("  Part %d: %-22s %d/%d" % (part, m["parts"][part - 1], p, len(cases)))
+        total_p += p
+        total_c += len(cases)
+    st["submitted"] = True
+    st["final"] = [total_p, total_c]
+    st["elapsed"] = round(elapsed)
+    save_state(state)
+    banner("SUBMITTED %s   time used %s / %d:00" % (problem, fmt_mmss(elapsed), st["minutes"]))
+    print("\n".join(lines))
+    print("\n  TOTAL: %d/%d test cases" % (total_p, total_c))
+    print("\nPer-part completion times:")
+    for k in sorted(st["part_times"]):
+        print("  through part %s: %s" % (k, fmt_mmss(st["part_times"][k])))
+    print("\nNow run: ./oa reveal %s" % problem)
+
+
+def cmd_reveal(args):
+    problem = args[0]
+    st = load_state().get(problem) or die("not started")
+    if not st.get("submitted"):
+        die("submit first: ./oa submit %s" % problem)
+    m = meta(problem)
+    for part in range(1, len(m["parts"]) + 1):
+        banner("PART %d - %s" % (part, m["parts"][part - 1]))
+        for name, inp, exp in collect_cases(problem, part):
+            got, err = run_case(problem, inp)
+            ok = (err is None and normalize(got) == normalize(exp))
+            print("\n[%s] %s" % ("ok  " if ok else "FAIL", name))
+            if not ok:
+                print("--- input ---")
+                print(inp.rstrip())
+                if err:
+                    print("--- %s ---" % err)
+                else:
+                    show_diff(exp, got)
+    snapdir = os.path.join(WORK, problem, ".snapshots")
+    if os.path.isdir(snapdir):
+        snaps = sorted(os.listdir(snapdir))
+        banner("HOW YOUR CODE EVOLVED (%d snapshots)" % len(snaps))
+        prev = None
+        for fn in snaps:
+            path = os.path.join(snapdir, fn)
+            nlines = sum(1 for _ in open(path))
+            part, secs = fn[1:].split("-")
+            churn = ""
+            if prev:
+                d = subprocess.run(["diff", prev, path], capture_output=True, text=True)
+                changed = sum(1 for ln in d.stdout.split("\n")
+                              if ln[:1] in ("<", ">"))
+                churn = "  %+d lines changed" % changed
+            print("  part %s at %s   %3d lines%s"
+                  % (part, fmt_mmss(int(secs.split(".")[0])), nlines, churn))
+            prev = path
+
+    print("\nReference solutions (read AFTER you've tried to fix it yourself):")
+    for part in range(1, len(m["parts"]) + 1):
+        p = os.path.join(REF, problem, "part%d.py" % part)
+        if os.path.exists(p):
+            print("  %s" % os.path.relpath(p, ROOT))
+
+
+def cmd_status(args):
+    state = load_state()
+    if not state:
+        print("nothing attempted yet")
+        return
+    for problem, st in sorted(state.items()):
+        if st.get("submitted"):
+            print("  %-20s submitted  %d/%d cases  in %s"
+                  % (problem, st["final"][0], st["final"][1], fmt_mmss(st["elapsed"])))
+        else:
+            print("  %-20s IN PROGRESS  part %d  %s left"
+                  % (problem, st["unlocked"], fmt_mmss(remaining(st))))
+
+
+def cmd_reset(args):
+    problem = args[0]
+    state = load_state()
+    sp = sol_path(problem)
+    if os.path.exists(sp):
+        stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+        arch = os.path.join(WORK, problem, "attempt-%s.py" % stamp)
+        shutil.move(sp, arch)
+        print("archived your solution to %s" % os.path.relpath(arch, ROOT))
+    state.pop(problem, None)
+    save_state(state)
+    print("%s reset" % problem)
+
+
+CMDS = {"list": cmd_list, "start": cmd_start, "spec": cmd_spec, "test": cmd_test,
+        "time": cmd_time, "submit": cmd_submit, "reveal": cmd_reveal,
+        "status": cmd_status, "reset": cmd_reset}
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2 or sys.argv[1] not in CMDS:
+        print(__doc__)
+        sys.exit(0 if len(sys.argv) < 2 else 1)
+    CMDS[sys.argv[1]](sys.argv[2:])

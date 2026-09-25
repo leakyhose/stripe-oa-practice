@@ -1,0 +1,8 @@
+3
+1 1 1
+5
+CONNECT a shared
+CONNECT b shared
+DISCONNECT a
+CONNECT c shared
+CONNECT d other

@@ -1,0 +1,4 @@
+3
+o1 DEPOSIT a 10
+o2 REVERSE o1
+o3 REVERSE o2

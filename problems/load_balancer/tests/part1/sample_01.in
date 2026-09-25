@@ -1,0 +1,8 @@
+3
+10 10 10
+5
+CONNECT c1 objA
+CONNECT c2 objB
+CONNECT c3 objC
+CONNECT c4 objD
+CONNECT c5 objE

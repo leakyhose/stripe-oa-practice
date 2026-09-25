@@ -1,0 +1,5 @@
+4
+g1 DEPOSIT solo 50
+g2 TRANSFER solo solo 51
+g3 TRANSFER solo solo 50
+g4 TRANSFER solo solo 0

@@ -1,0 +1,7 @@
+2
+99 99
+4
+CONNECT c1 obj
+CONNECT c2 obj
+DISCONNECT c2
+CONNECT c3 obj

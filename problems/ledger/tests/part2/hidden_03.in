@@ -1,0 +1,5 @@
+4
+i1 DEPOSIT rich 100
+i2 TRANSFER rich poor 101
+i3 DEPOSIT poor 0
+i4 TRANSFER rich poor 100

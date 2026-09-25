@@ -1,0 +1,4 @@
+# your attempts, progress, and snapshots stay local
+workspace/
+.state.json
+notes/

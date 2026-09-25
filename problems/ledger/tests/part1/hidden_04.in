@@ -1,0 +1,5 @@
+4
+c1 WITHDRAW ghost 100
+c2 WITHDRAW ghost 0
+c3 DEPOSIT ghost 100
+c4 WITHDRAW ghost 100
